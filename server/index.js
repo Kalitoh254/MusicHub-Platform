@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import express from 'express';
 import authRoutes from './routes/auth.js';
+import profileRoutes from './routes/profile.js';
+import adminRoutes from './routes/admin.js';
 import { requireSameOrigin } from './auth/origin.js';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -39,6 +41,8 @@ app.use('/api/', rateLimit({
 }));
 
 app.use('/api/v1/auth', requireSameOrigin, authRoutes);
+app.use('/api/v1/profile', requireSameOrigin, profileRoutes);
+app.use('/api/v1/admin', requireSameOrigin, adminRoutes);
 
 app.get('/api/v1/health/database', async (_req, res) => { try { const { pool } = await import('./db/pool.js'); await pool.query('SELECT 1'); res.json({ status: 'ok', database: 'connected' }); } catch { res.status(503).json({ status: 'error', database: 'unavailable' }); } });
 

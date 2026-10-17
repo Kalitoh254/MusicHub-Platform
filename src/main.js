@@ -1,4 +1,5 @@
 import { initAuthUI } from './auth/ui.js';
+import { initAccountManagement } from './account/ui.js';
 import './styles/main.css';
 
 const $ = (selector) => document.querySelector(selector);
@@ -144,3 +145,4 @@ fetch('/api/v1/health').then(response => {
 showView('home');
 
 initAuthUI();
+initAccountManagement();

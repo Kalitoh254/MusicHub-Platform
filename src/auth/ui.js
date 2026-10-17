@@ -48,6 +48,7 @@ export async function initAuthUI() {
     };
 
     const renderAccount = (account) => {
+      document.dispatchEvent(new CustomEvent('musichub:account-changed', { detail: account }));
       content.replaceChildren();
       const identity = document.createElement('p');
       identity.className = 'mh-auth-identity';

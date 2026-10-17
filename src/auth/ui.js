@@ -47,7 +47,7 @@ export async function initAuthUI() {
       return { wrap, input };
     };
 
-    const renderAccount = (account) => {
+    const renderAccount = (account, verificationEmailSent) => {
       document.dispatchEvent(new CustomEvent('musichub:account-changed', { detail: account }));
       content.replaceChildren();
       const identity = document.createElement('p');
@@ -57,7 +57,28 @@ export async function initAuthUI() {
       role.className = 'mh-auth-note';
       role.textContent = account.emailVerified
         ? 'Email verified'
-        : 'Email verification will be available once email delivery is configured.';
+        : verificationEmailSent === false
+          ? 'Email is not verified. The verification email could not be sent; email delivery needs configuration.'
+          : 'Email is not verified. Use the button below to request a verification email.';
+      const resend = account.emailVerified ? null : button('Resend verification email', async () => {
+        resend.disabled = true;
+        showMessage('Requesting verification email…');
+        try {
+          const response = await fetch('/api/v1/auth/verify-email/resend', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: account.email })
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.error || 'Unable to request verification email.');
+          showMessage(data.message || 'Check your inbox for the verification link.');
+        } catch (error) {
+          showMessage(error.message);
+        } finally {
+          resend.disabled = false;
+        }
+      }, 'mh-auth-secondary');
       const signOut = button('Sign out', async () => {
         signOut.disabled = true;
         try {
@@ -69,8 +90,14 @@ export async function initAuthUI() {
           signOut.disabled = false;
         }
       });
-      content.append(identity, role, signOut);
-      showMessage('Signed in');
+      content.append(identity, role);
+      if (resend) content.append(resend);
+      content.append(signOut);
+      showMessage(account.emailVerified
+        ? 'Signed in'
+        : verificationEmailSent === false
+          ? 'Account created, but email delivery needs configuration.'
+          : 'Signed in. Email verification is pending.');
     };
 
     const renderForms = (mode = 'login') => {
@@ -95,7 +122,7 @@ export async function initAuthUI() {
       const note = document.createElement('p');
       note.className = 'mh-auth-note';
       note.textContent = mode === 'register'
-        ? 'Use a password of at least 12 characters. Email verification and password recovery are not yet enabled.'
+        ? 'Use a password of at least 12 characters. We will send an email verification link after registration.'
         : 'Your session is stored in a secure, HTTP-only cookie.';
 
       form.append(submit);
@@ -107,7 +134,7 @@ export async function initAuthUI() {
           const result = mode === 'register'
             ? await register(nameField.input.value.trim(), emailField.input.value.trim(), passwordField.input.value)
             : await login(emailField.input.value.trim(), passwordField.input.value);
-          renderAccount(result.account);
+          renderAccount(result.account, result.verificationEmailSent);
         } catch (error) {
           showMessage(error.message);
           submit.disabled = false;
@@ -116,12 +143,41 @@ export async function initAuthUI() {
       content.append(form, switchMode, note);
     };
 
-    getCurrentAccount()
+    const loadAccount = () => getCurrentAccount()
       .then(({ account }) => renderAccount(account))
       .catch(() => {
         showMessage('Sign in or create an account.');
         renderForms('login');
       });
+
+    const verificationToken = new URLSearchParams(window.location.search).get('verifyEmail');
+    if (verificationToken) {
+      window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+      showMessage('Verifying email link…');
+      fetch('/api/v1/auth/verify-email/confirm', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: verificationToken })
+      })
+        .then(async response => {
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.error || 'Email verification failed.');
+          return data;
+        })
+        .then(() => getCurrentAccount()
+          .then(({ account }) => renderAccount(account))
+          .catch(() => {
+            showMessage('Email verified successfully. Sign in to continue.');
+            renderForms('login');
+          }))
+        .catch(error => {
+          showMessage(error.message);
+          renderForms('login');
+        });
+    } else {
+      loadAccount();
+    }
   };
 
   if (document.readyState === 'loading') {

@@ -23,6 +23,7 @@ const post = (path, body) => request(path, {
 export const register = (displayName, email, password) =>
   post('/register', { displayName, email, password });
 export const login = (email, password) => post('/login', { email, password });
+export const googleLogin = credential => post('/google', { credential });
 export const logout = () => request('/logout', { method: 'POST' });
 export const getCurrentAccount = () => request('/me');
 export const resendVerificationCode = email =>

@@ -21,7 +21,12 @@ const isProduction = process.env.NODE_ENV === 'production';
 app.disable('x-powered-by');
 app.set('trust proxy', isProduction ? 1 : false);
 app.use(helmet({
-  contentSecurityPolicy: isProduction ? undefined : false,
+  contentSecurityPolicy: isProduction ? { directives: {
+    scriptSrc: ["'self'", 'https://accounts.google.com'],
+    frameSrc: ["'self'", 'https://accounts.google.com/gsi/'],
+    connectSrc: ["'self'", 'https://accounts.google.com/gsi/'],
+    styleSrc: ["'self'", "'unsafe-inline'", 'https://accounts.google.com']
+  } } : false,
   crossOriginResourcePolicy: { policy: 'cross-origin' }
 }));
 app.use(cors({

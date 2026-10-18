@@ -35,8 +35,28 @@ function safeAccount(account) {
     role: account.role, emailVerified: account.email_verified
   };
 }
-function logDeliveryFailure() {
-  console.warn('Verification code delivery failed; check SMTP and EMAIL_OTP_SECRET configuration.');
+function logDeliveryFailure(error) {
+  const message = typeof error?.message === 'string' ? error.message : '';
+  const reason = /EMAIL_OTP_SECRET/.test(message)
+    ? 'otp_secret_invalid'
+    : /SMTP email is not configured|Invalid SMTP port/.test(message)
+      ? 'smtp_configuration_invalid'
+      : 'transport_or_provider_error';
+
+  console.error('Verification code delivery failed', {
+    reason,
+    code: typeof error?.code === 'string' ? error.code : undefined,
+    command: typeof error?.command === 'string' ? error.command : undefined,
+    responseCode: Number.isInteger(error?.responseCode) ? error.responseCode : undefined,
+    syscall: typeof error?.syscall === 'string' ? error.syscall : undefined,
+    hostname: typeof error?.hostname === 'string' ? error.hostname : undefined,
+    smtpHostConfigured: Boolean(process.env.SMTP_HOST),
+    smtpPortConfigured: Boolean(process.env.SMTP_PORT),
+    smtpUserConfigured: Boolean(process.env.SMTP_USER),
+    smtpPasswordConfigured: Boolean(process.env.SMTP_PASS),
+    emailFromConfigured: Boolean(process.env.EMAIL_FROM),
+    otpSecretConfigured: Boolean(process.env.EMAIL_OTP_SECRET && process.env.EMAIL_OTP_SECRET.length >= 32)
+  });
 }
 
 router.post('/register', authLimiter, async (req, res, next) => {
@@ -55,8 +75,8 @@ router.post('/register', authLimiter, async (req, res, next) => {
     let verificationEmailSent = false;
     try {
       verificationEmailSent = await createAndSendEmailCode(account);
-    } catch {
-      logDeliveryFailure();
+    } catch (error) {
+      logDeliveryFailure(error);
     }
     clearSessionCookie(res);
     return res.status(201).json({
@@ -113,7 +133,7 @@ router.post('/verify-email/resend', resendLimiter, async (req, res, next) => {
         try {
           await createAndSendEmailCode(result.rows[0]);
         } catch (error) {
-          if (error.code !== 'OTP_COOLDOWN') logDeliveryFailure();
+          if (error.code !== 'OTP_COOLDOWN') logDeliveryFailure(error);
         }
       }
     }

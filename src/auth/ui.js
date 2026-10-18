@@ -69,11 +69,22 @@ export async function initAuthUI() {
         window.google.accounts.id.initialize({
           client_id: clientId,
           callback: async ({ credential }) => {
+            if (!credential) {
+              showMessage('Google did not return a sign-in credential. Please try again.');
+              return;
+            }
             showMessage('Signing in with Google…');
             try {
               const result = await googleLogin(credential);
-              renderAccount(result.account);
-            } catch (error) { showMessage(error.message); }
+              if (!result?.account) {
+                throw new Error('Google sign-in returned no account. Please try again.');
+              }
+              // Reload after the server sets the session cookie, then let
+              // normal app initialization verify the session through /me.
+              window.location.replace('/');
+            } catch (error) {
+              showMessage(error.message || 'Google sign-in failed. Please try again.');
+            }
           }
         });
         window.google.accounts.id.renderButton(wrapper, {

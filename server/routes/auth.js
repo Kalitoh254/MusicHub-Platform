@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import rateLimit from 'express-rate-limit';
 import { pool } from '../db/pool.js';
 import {
@@ -10,6 +11,7 @@ import {
 } from '../auth/email-verification.js';
 
 const router = Router();
+const googleJwks = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, limit: 10,
   standardHeaders: 'draft-8', legacyHeaders: false,
@@ -159,6 +161,81 @@ router.post('/verify-email/confirm', confirmLimiter, async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+router.post('/google', authLimiter, async (req, res, next) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const credential = req.body?.credential;
+  if (!clientId) return res.status(503).json({ error: 'Google sign-in is not configured.' });
+  if (typeof credential !== 'string' || credential.length > 12000)
+    return res.status(401).json({ error: 'Invalid Google credential.' });
+
+  let payload;
+  try {
+    ({ payload } = await jwtVerify(credential, googleJwks, {
+      issuer: ['https://accounts.google.com', 'accounts.google.com'],
+      audience: clientId
+    }));
+  } catch {
+    return res.status(401).json({ error: 'Google sign-in could not be verified.' });
+  }
+  if (payload.email_verified !== true || typeof payload.email !== 'string' ||
+      typeof payload.sub !== 'string' || !payload.sub || payload.sub.length > 255)
+    return res.status(401).json({ error: 'Google must provide a verified email.' });
+
+  const email = payload.email.trim().toLowerCase();
+  const displayName = typeof payload.name === 'string' && payload.name.trim()
+    ? payload.name.trim().slice(0, 80) : email.split('@')[0].slice(0, 80);
+  let connection;
+  let account;
+  try {
+    connection = await pool.connect();
+    await connection.query('BEGIN');
+    const linked = await connection.query(
+      "SELECT a.id, a.email, a.display_name, a.role, a.email_verified, a.disabled_at FROM auth_identities i JOIN auth_accounts a ON a.id = i.account_id WHERE i.provider = 'google' AND i.provider_subject = $1 FOR UPDATE OF a",
+      [payload.sub]
+    );
+    if (linked.rows[0]) {
+      account = linked.rows[0];
+      if (account.disabled_at) {
+        await connection.query('ROLLBACK');
+        return res.status(403).json({ error: 'This account is disabled.' });
+      }
+    } else {
+      const existing = await connection.query(
+        'SELECT id FROM auth_accounts WHERE email_normalized = lower(trim($1))',
+        [email]
+      );
+      if (existing.rowCount) {
+        await connection.query('ROLLBACK');
+        return res.status(409).json({
+          code: 'ACCOUNT_LINK_REQUIRED',
+          error: 'An account already uses this email. Sign in using its existing method.'
+        });
+      }
+      const created = await connection.query(
+        'INSERT INTO auth_accounts (email, password_hash, display_name, email_verified) VALUES ($1, NULL, $2, TRUE) RETURNING id, email, display_name, role, email_verified, disabled_at',
+        [email, displayName]
+      );
+      account = created.rows[0];
+      await connection.query(
+        "INSERT INTO auth_identities (account_id, provider, provider_subject) VALUES ($1, 'google', $2)",
+        [account.id, payload.sub]
+      );
+    }
+    await connection.query('COMMIT');
+  } catch (error) {
+    if (connection) try { await connection.query('ROLLBACK'); } catch {}
+    if (error.code === '23505')
+      return res.status(409).json({ error: 'Account conflict. Please sign in again.' });
+    return next(error);
+  } finally {
+    connection?.release();
+  }
+  try {
+    await createSession(account.id, res);
+    return res.json({ account: safeAccount(account) });
+  } catch (error) { return next(error); }
 });
 
 router.post('/logout', async (req, res, next) => {

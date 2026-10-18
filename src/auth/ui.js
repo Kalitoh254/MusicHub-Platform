@@ -1,7 +1,21 @@
 import {
   register, login, logout, getCurrentAccount,
-  resendVerificationCode, verifyEmailCode
+  resendVerificationCode, verifyEmailCode, googleLogin
 } from './api.js';
+
+let googleScriptPromise;
+function loadGoogleIdentityScript() {
+  if (window.google?.accounts?.id) return Promise.resolve();
+  if (!googleScriptPromise) googleScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('Google sign-in could not load.'));
+    document.head.append(script);
+  });
+  return googleScriptPromise;
+}
 
 export async function initAuthUI() {
   const mount = () => {
@@ -40,6 +54,36 @@ export async function initAuthUI() {
       }
       wrap.append(input);
       return { wrap, input };
+    };
+
+    const mountGoogleButton = async () => {
+      const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+      if (!clientId) return;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'mh-auth-google';
+      wrapper.style.cssText = 'margin:12px 0;min-height:40px';
+      content.prepend(wrapper);
+      try {
+        await loadGoogleIdentityScript();
+        if (!wrapper.isConnected) return;
+        window.google.accounts.id.initialize({
+          client_id: clientId,
+          callback: async ({ credential }) => {
+            showMessage('Signing in with Google…');
+            try {
+              const result = await googleLogin(credential);
+              renderAccount(result.account);
+            } catch (error) { showMessage(error.message); }
+          }
+        });
+        window.google.accounts.id.renderButton(wrapper, {
+          theme: 'outline', size: 'large', text: 'continue_with',
+          shape: 'rectangular', width: 280
+        });
+      } catch {
+        wrapper.remove();
+        showMessage('Google sign-in is unavailable. Email sign-in remains available.');
+      }
     };
 
     const renderForms = (mode = 'login', presetEmail = '') => {
@@ -92,6 +136,7 @@ export async function initAuthUI() {
         }
       });
       content.append(form, switchMode, note);
+      void mountGoogleButton();
     };
 
     const renderVerification = (email, message = 'Enter the six-digit code sent to your email.') => {

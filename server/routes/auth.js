@@ -6,7 +6,7 @@ import {
   revokeCurrentSession, requireLocalAuth, clearSessionCookie
 } from '../auth/local.js';
 import {
-  createVerificationToken, sendVerificationEmail, verifyEmailToken
+  createAndSendEmailCode, verifyEmailCode
 } from '../auth/email-verification.js';
 
 const router = Router();
@@ -36,7 +36,7 @@ function safeAccount(account) {
   };
 }
 function logDeliveryFailure() {
-  console.warn('Verification email delivery failed. Check SMTP configuration.');
+  console.warn('Verification code delivery failed; check SMTP and EMAIL_OTP_SECRET configuration.');
 }
 
 router.post('/register', authLimiter, async (req, res, next) => {
@@ -50,23 +50,23 @@ router.post('/register', authLimiter, async (req, res, next) => {
         error: 'Provide a valid email, a display name of 2–80 characters, and a password of 12–128 characters.'
       });
     }
+
     const account = await registerAccount({ email, password, displayName });
     let verificationEmailSent = false;
     try {
-      const token = await createVerificationToken(account.id);
-      if (token) {
-        await sendVerificationEmail({
-          email: account.email, displayName: account.display_name, token
-        });
-        verificationEmailSent = true;
-      }
+      verificationEmailSent = await createAndSendEmailCode(account);
     } catch {
       logDeliveryFailure();
     }
-    await createSession(account.id, res);
-    res.status(201).json({ account: safeAccount(account), verificationEmailSent });
+    clearSessionCookie(res);
+    return res.status(201).json({
+      account: safeAccount(account),
+      verificationEmailSent,
+      verificationRequired: true
+    });
   } catch (error) {
-    if (error.code === '23505' && error.constraint === 'auth_accounts_email_unique') {
+    if (error.code === '23505' &&
+        error.constraint === 'auth_accounts_email_unique') {
       return res.status(409).json({ error: 'An account with that email already exists.' });
     }
     next(error);
@@ -84,6 +84,13 @@ router.post('/login', authLimiter, async (req, res, next) => {
     if (!account) {
       clearSessionCookie(res);
       return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+    if (!account.email_verified) {
+      clearSessionCookie(res);
+      return res.status(403).json({
+        code: 'EMAIL_VERIFICATION_REQUIRED',
+        error: 'Verify your email address before signing in.'
+      });
     }
     await createSession(account.id, res);
     res.json({ account: safeAccount(account) });
@@ -104,16 +111,14 @@ router.post('/verify-email/resend', resendLimiter, async (req, res, next) => {
       );
       if (result.rows[0]) {
         try {
-          const account = result.rows[0];
-          const token = await createVerificationToken(account.id);
-          if (token) await sendVerificationEmail({ ...account, token });
-        } catch {
-          logDeliveryFailure();
+          await createAndSendEmailCode(result.rows[0]);
+        } catch (error) {
+          if (error.code !== 'OTP_COOLDOWN') logDeliveryFailure();
         }
       }
     }
     res.status(202).json({
-      message: 'If the account exists and needs verification, a verification email will be sent.'
+      message: 'If the account exists and needs verification, a code will be sent.'
     });
   } catch (error) {
     next(error);
@@ -122,15 +127,15 @@ router.post('/verify-email/resend', resendLimiter, async (req, res, next) => {
 
 router.post('/verify-email/confirm', confirmLimiter, async (req, res, next) => {
   try {
-    const token = req.body?.token;
-    if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{40,100}$/.test(token)) {
-      return res.status(400).json({ error: 'This verification link is invalid or expired.' });
+    const { email, code } = req.body || {};
+    if (!validEmail(email) || typeof code !== 'string' || !/^\d{6}$/.test(code)) {
+      return res.status(400).json({ error: 'Enter the email address and six-digit verification code.' });
     }
-    const verified = await verifyEmailToken(token);
+    const verified = await verifyEmailCode(email, code);
     if (!verified) {
-      return res.status(400).json({ error: 'This verification link is invalid, expired, or already used.' });
+      return res.status(400).json({ error: 'The code is invalid, expired, or already used.' });
     }
-    res.json({ verified: true, message: 'Email verified successfully.' });
+    res.json({ verified: true, message: 'Email verified successfully. You can now sign in.' });
   } catch (error) {
     next(error);
   }

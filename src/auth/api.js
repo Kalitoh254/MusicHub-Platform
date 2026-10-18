@@ -9,21 +9,23 @@ async function request(path, options = {}) {
   });
   if (response.status === 204) return null;
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+  if (!response.ok) {
+    const error = new Error(data.error || `Request failed (${response.status})`);
+    error.code = data.code;
+    throw error;
+  }
   return data;
 }
-
+const post = (path, body) => request(path, {
+  method: 'POST',
+  body: JSON.stringify(body)
+});
 export const register = (displayName, email, password) =>
-  request('/register', {
-    method: 'POST',
-    body: JSON.stringify({ displayName, email, password })
-  });
-
-export const login = (email, password) =>
-  request('/login', {
-    method: 'POST',
-    body: JSON.stringify({ email, password })
-  });
-
+  post('/register', { displayName, email, password });
+export const login = (email, password) => post('/login', { email, password });
 export const logout = () => request('/logout', { method: 'POST' });
 export const getCurrentAccount = () => request('/me');
+export const resendVerificationCode = email =>
+  post('/verify-email/resend', { email });
+export const verifyEmailCode = (email, code) =>
+  post('/verify-email/confirm', { email, code });
